@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#080808">
+<title>Roslindale Transit Board</title>
+<style>
+  :root{
+    --bg:#070707;
+    --panel:#111;
+    --line:#2b2b2b;
+    --cream:#f4e7bf;
+    --muted:#9d9789;
+    --red:#d35b4b;
+    --green:#b7d58b;
+    --gold:#d6b56d;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--cream);
+    font-family:Georgia,"Times New Roman",serif;overflow:hidden}
+  body{padding:18px 22px 14px}
+  .top{height:11vh;display:flex;align-items:center;justify-content:space-between;
+       border-bottom:1px solid var(--line);margin-bottom:14px}
+  .title{font-size:clamp(24px,3vw,44px);letter-spacing:.12em;text-transform:uppercase}
+  .clock{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:clamp(24px,3vw,42px);letter-spacing:.06em}
+  .board{height:80vh;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:14px}
+  .station{background:linear-gradient(#121212,#0d0d0d);border:1px solid var(--line);
+    border-radius:4px;padding:18px 20px;display:flex;flex-direction:column;min-width:0}
+  .station-head{display:flex;justify-content:space-between;align-items:baseline;
+    border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:8px}
+  .station-name{font-size:clamp(19px,2vw,30px);letter-spacing:.08em;text-transform:uppercase}
+  .walk{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);
+    font-size:clamp(12px,1.2vw,17px);white-space:nowrap}
+  .rows{display:flex;flex-direction:column;gap:8px;flex:1;justify-content:center}
+  .row{display:grid;grid-template-columns:72px minmax(0,1fr) 92px 112px;gap:10px;align-items:center;
+       min-height:64px;border-bottom:1px dotted #262626}
+  .route{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:clamp(24px,2.3vw,38px);
+    font-weight:700;text-align:center;border:1px solid #383838;padding:5px 3px;background:#090909}
+  .dest{font-size:clamp(18px,1.8vw,27px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .eta,.leave{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-align:right;
+    font-size:clamp(18px,1.8vw,28px);white-space:nowrap}
+  .leave{color:var(--gold)}
+  .leave.go{color:var(--green);font-weight:800}
+  .empty{grid-column:1/-1;text-align:center;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px}
+  .foot{position:fixed;left:22px;right:22px;bottom:5px;display:flex;justify-content:space-between;
+    color:#6f6a5f;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+  .flip{display:inline-block;transform-origin:center;animation:flip .42s ease both}
+  @keyframes flip{0%{transform:perspective(300px) rotateX(0deg);filter:brightness(1)}
+                   45%{transform:perspective(300px) rotateX(-88deg);filter:brightness(.55)}
+                   100%{transform:perspective(300px) rotateX(0deg);filter:brightness(1)}}
+  @media(max-width:900px){
+    body{padding:12px}
+    .board{grid-template-columns:1fr;grid-template-rows:repeat(4,1fr);height:82vh;overflow:auto}
+    .station{min-height:220px}
+    .row{grid-template-columns:58px minmax(0,1fr) 70px 92px}
+    .foot{left:12px;right:12px}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="title">Roslindale Transit</div>
+  <div id="clock" class="clock">--:--</div>
+</header>
+
+<main id="board" class="board"></main>
+
+<div class="foot">
+  <span id="status">Connecting to MBTA…</span>
+  <span>Auto-refresh: 20 sec</span>
+</div>
+
+<script>
+/*
+  ROSLINDALE TRANSIT BOARD
+  ------------------------
+  MBTA V3 API powers the live predictions.
+  The API key is optional for testing/personal use. If you get rate-limited,
+  put your key in API_KEY below.
+
+  Walking times and buffers are the values we worked out:
+    Penfield:          2 min walk + 0 min buffer
+    Washington St:    9 min walk + 2 min buffer
+    Cummings Hwy:     3 min walk + 2 min buffer
+    Roslindale Village:7 min walk + 1 min buffer
+
+  To change a stop, change only stopName below.
+*/
+const API_BASE = "https://api-v3.mbta.com";
+const API_KEY = ""; // Optional MBTA API key
+
+const CONFIG = [
+  {
+    label:"Penfield",
+    stopName:"Belgrade Ave @ Penfield St",
+    walk:2, buffer:0,
+    kind:"bus",
+    max:3
+  },
+  {
+    label:"Washington Street",
+    stopName:"Washington St @ Cummins Hwy",
+    walk:9, buffer:2,
+    kind:"bus",
+    max:3
+  },
+  {
+    label:"Cummings Highway",
+    stopName:"Cummins Hwy @ Washington St",
+    walk:3, buffer:2,
+    kind:"bus",
+    max:3
+  },
+  {
+    label:"Roslindale Village",
+    stopId:"place-NB-0064",
+    walk:7, buffer:1,
+    kind:"rail",
+    max:3
+  }
+];
+
+const previous = new Map();
+const stopCache = new Map();
+
+function apiHeaders(){
+  return API_KEY ? {"x-api-key":API_KEY} : {};
+}
+
+async function getJSON(path){
+  const r = await fetch(API_BASE + path, {headers:apiHeaders(), cache:"no-store"});
+  if(!r.ok) throw new Error(`MBTA ${r.status}`);
+  return r.json();
+}
+
+async function findStop(name){
+  if(stopCache.has(name)) return stopCache.get(name);
+  const q = encodeURIComponent(name);
+  const data = await getJSON(`/stops?filter[name]=${q}&page[limit]=20`);
+  const exact = (data.data||[]).filter(x => (x.attributes.name||"").toLowerCase() === name.toLowerCase());
+  const stop = exact[0] || (data.data||[])[0];
+  if(!stop) throw new Error(`Stop not found: ${name}`);
+  stopCache.set(name, stop.id);
+  return stop.id;
+}
+
+function attrs(included, type, id){
+  const x = included.find(i => i.type===type && i.id===id);
+  return x ? x.attributes : {};
+}
+
+function minutesUntil(iso){
+  if(!iso) return null;
+  return Math.max(0, Math.round((new Date(iso)-Date.now())/60000));
+}
+
+function leaveMinutes(eta, walk, buffer){
+  return eta - walk - buffer;
+}
+
+function displayMinutes(n){
+  if(n === null) return "—";
+  if(n <= 0) return "NOW";
+  return `${n} min`;
+}
+
+function rowHTML(item, idx, stationKey){
+  const old = previous.get(stationKey+":"+idx);
+  const changed = old !== item.key;
+  previous.set(stationKey+":"+idx, item.key);
+  const flip = changed ? " flip" : "";
+  const leave = leaveMinutes(item.eta, item.walk, item.buffer);
+  return `<div class="row">
+    <div class="route${flip}">${escapeHTML(item.route)}</div>
+    <div class="dest${flip}">${escapeHTML(item.dest)}</div>
+    <div class="eta${flip}">${displayMinutes(item.eta)}</div>
+    <div class="leave${leave<=0?" go":""}${flip}">${leave<=0?"GO NOW":"LEAVE "+leave+"m"}</div>
+  </div>`;
+}
+
+function escapeHTML(s){
+  return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
+}
+
+async function getPredictions(cfg){
+  const stopId = cfg.stopId || await findStop(cfg.stopName);
+  const include = "route,trip";
+  const path = `/predictions?filter[stop]=${encodeURIComponent(stopId)}&include=${include}&sort=departure_time&page[limit]=30`;
+  const json = await getJSON(path);
+  const included = json.included || [];
+
+  return (json.data||[])
+    .map(p=>{
+      const a=p.attributes||{};
+      const routeId=p.relationships?.route?.data?.id;
+      const tripId=p.relationships?.trip?.data?.id;
+      const ra=attrs(included,"route",routeId);
+      const ta=attrs(included,"trip",tripId);
+      const iso=a.departure_time || a.arrival_time;
+      return {
+        id:p.id,
+        route:ra.short_name || ra.long_name || routeId || "?",
+        dest:ta.headsign || ra.long_name || "MBTA",
+        eta:minutesUntil(iso),
+        walk:cfg.walk, buffer:cfg.buffer,
+        key:(p.id||"")+"|"+iso,
+        sortTime:iso
+      };
+    })
+    .filter(x=>x.eta!==null && x.eta<=120)
+    .sort((a,b)=>(a.eta-b.eta));
+
+  // Keep the board useful if the API gives multiple predictions for the same vehicle/trip.
+}
+
+function renderStation(cfg, items, error){
+  const board = document.getElementById("board");
+  let el=document.getElementById("station-"+slug(cfg.label));
+  if(!el){
+    el=document.createElement("section");
+    el.className="station";
+    el.id="station-"+slug(cfg.label);
+    board.appendChild(el);
+  }
+  const rows = items.length
+    ? items.slice(0,cfg.max).map((x,i)=>rowHTML(x,i,cfg.label)).join("")
+    : `<div class="empty">${error ? escapeHTML(error) : "No upcoming departures"}</div>`;
+  el.innerHTML = `
+    <div class="station-head">
+      <div class="station-name">${escapeHTML(cfg.label)}</div>
+      <div class="walk">${cfg.walk} min walk · +${cfg.buffer} buffer</div>
+    </div>
+    <div class="rows">${rows}</div>`;
+}
+
+function slug(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,"-")}
+
+async function refresh(){
+  const status=document.getElementById("status");
+  let ok=0;
+  await Promise.all(CONFIG.map(async cfg=>{
+    try{
+      const items=await getPredictions(cfg);
+      renderStation(cfg,items,null);
+      ok++;
+    }catch(e){
+      console.error(cfg.label,e);
+      renderStation(cfg,[],e.message);
+    }
+  }));
+  status.textContent=`MBTA live data · ${ok}/${CONFIG.length} panels updated · ${new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}`;
+}
+
+function tickClock(){
+  document.getElementById("clock").textContent =
+    new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
+}
+tickClock();
+setInterval(tickClock,1000);
+refresh();
+setInterval(refresh,20000);
+
+// Keep the screen awake while the page is open when supported.
+if("wakeLock" in navigator){
+  let lock=null;
+  const keepAwake=async()=>{try{lock=await navigator.wakeLock.request("screen")}catch(e){}};
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")keepAwake()});
+  keepAwake();
+}
+</script>
+</body>
+</html>
